@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Reportes Lotes</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+        
+        .file-input-label {
+            display: block;
+            padding: 12px;
+            background: #f5f5f5;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 14px;
+            color: #666;
+            transition: all 0.3s;
+        }
+        
+        .file-input-label:hover {
+            border-color: #667eea;
+            background: #f9f9ff;
+        }
+        
+        .file-input-label.active {
+            border-color: #667eea;
+            background: #f0f3ff;
+            color: #667eea;
+        }
+        
+        #archivo {
+            display: none;
+        }
+        
+        .file-name {
+            font-size: 13px;
+            color: #888;
+            margin-top: 6px;
+        }
+        
+        .input-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+        
+        input[type="text"]:focus,
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .info-box {
+            background: #f0f3ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            border-radius: 4px;
+            margin: 20px 0;
+            font-size: 13px;
+            color: #555;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #FF8C00 0%, #FF6B00 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(255, 107, 0, 0.3);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .success {
+            display: none;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        
+        .error {
+            display: none;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 12px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">📊</div>
+            <h1>Generador de Reportes</h1>
+            <p>Distribución automática de lotes Benford</p>
+        </div>
+        
+        <form id="formulario">
+            <div class="form-group">
+                <label>Archivo Excel de Operaciones</label>
+                <div class="file-input-wrapper">
+                    <label for="archivo" class="file-input-label" id="fileLabel">
+                        📁 Selecciona un archivo
+                    </label>
+                    <input type="file" id="archivo" name="archivo" accept=".xlsx,.xls" required>
+                    <div class="file-name" id="fileName"></div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Datos</label>
+                <div class="input-row">
+                    <div>
+                        <label style="font-size: 12px; margin-bottom: 6px;">Pto. de Venta</label>
+                        <input type="number" id="pto_venta" name="pto_venta" min="1" max="99" placeholder="01" required>
+                        <small style="color: #999;">2 dígitos</small>
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; margin-bottom: 6px;">Z</label>
+                        <input type="text" id="z_codigo" name="z_codigo" placeholder="08052026" pattern="\d{6,8}" required>
+                        <small style="color: #999;">6-8 dígitos</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="info-box">
+                ℹ️ Se generará un Excel con dos hojas: resumen y análisis detallado
+            </div>
+            
+            <button type="submit" class="btn" id="btnGenerar">
+                ✨ Generar Reporte
+            </button>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Procesando reporte...</p>
+            </div>
+            
+            <div class="success" id="success">
+                ✓ Reporte generado correctamente
+            </div>
+            
+            <div class="error" id="error"></div>
+        </form>
+        
+        <div class="footer">
+            Sistema de Reportes Lotes v1.0
+        </div>
+    </div>
+    
+    <script>
+        const formulario = document.getElementById('formulario');
+        const fileInput = document.getElementById('archivo');
+        const fileLabel = document.getElementById('fileLabel');
+        const fileName = document.getElementById('fileName');
+        const btnGenerar = document.getElementById('btnGenerar');
+        const loading = document.getElementById('loading');
+        const success = document.getElementById('success');
+        const error = document.getElementById('error');
+        
+        fileInput.addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                const name = e.target.files[0].name;
+                fileName.textContent = `✓ ${name}`;
+                fileLabel.classList.add('active');
+                fileLabel.textContent = '✓ Archivo seleccionado';
+            }
+        });
+        
+        formulario.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const archivo = document.getElementById('archivo').files[0];
+            const pto_venta = document.getElementById('pto_venta').value;
+            const z_codigo = document.getElementById('z_codigo').value;
+            
+            if (!archivo || !pto_venta || !z_codigo) {
+                mostrarError('Completa todos los campos');
+                return;
+            }
+            
+            if (pto_venta.length !== 2) {
+                mostrarError('Pto. debe ser 2 dígitos (ej: 01, 77)');
+                return;
+            }
+            
+            if (z_codigo.length < 6 || z_codigo.length > 8) {
+                mostrarError('Z debe ser 6-8 dígitos');
+                return;
+            }
+            
+            loading.style.display = 'block';
+            success.style.display = 'none';
+            error.style.display = 'none';
+            btnGenerar.disabled = true;
+            
+            const formData = new FormData();
+            formData.append('archivo', archivo);
+            formData.append('pto_venta', pto_venta);
+            formData.append('z_codigo', z_codigo);
+            
+            try {
+                const response = await fetch('/generar', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Error al generar el reporte');
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Reporte_Lotes_${new Date().toISOString().slice(0, 10)}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                loading.style.display = 'none';
+                success.style.display = 'block';
+                
+                setTimeout(() => {
+                    formulario.reset();
+                    fileLabel.classList.remove('active');
+                    fileLabel.textContent = '📁 Selecciona un archivo';
+                    fileName.textContent = '';
+                    success.style.display = 'none';
+                }, 3000);
+            } catch (err) {
+                mostrarError(err.message);
+            } finally {
+                loading.style.display = 'none';
+                btnGenerar.disabled = false;
+            }
+        });
+        
+        function mostrarError(msg) {
+            error.textContent = `✗ ${msg}`;
+            error.style.display = 'block';
+            loading.style.display = 'none';
+            btnGenerar.disabled = false;
+        }
+    </script>
+</body>
+</html>
