@@ -1,7 +1,6 @@
 import os 
 from flask import Flask, render_template, request, send_file, jsonify
 from flask_cors import CORS
-import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
