@@ -1,11 +1,10 @@
-import os 
+import os
 from flask import Flask, render_template, request, send_file, jsonify
 from flask_cors import CORS
-from openpyxl import Workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
 import io
-import os
 
 app = Flask(__name__)
 CORS(app)
@@ -20,25 +19,55 @@ class GeneradorReportes:
     def procesar(self, archivo_bytes, pto_venta, z_codigo):
         """Procesa el archivo y genera el reporte"""
         try:
-            df = pd.read_excel(io.BytesIO(archivo_bytes), sheet_name='Operaciones')
-            df['N° Cupón'] = df['N° Cupón'].astype(str)
+            wb = load_workbook(io.BytesIO(archivo_bytes))
+            ws = wb['Operaciones']
             
-            tickets_con_articulos = df.groupby('N° Caja').agg({
-                'Código': lambda x: list(x),
-                'Título': lambda x: list(x),
-                'Total': 'first',
-                'N° Cupón': 'first'
-            }).reset_index()
+            headers = [cell.value for cell in ws[1]]
+            datos = []
             
-            tickets_con_articulos['N_Articulos'] = tickets_con_articulos['Código'].apply(len)
+            for row in ws.iter_rows(min_row=2, values_only=False):
+                fila = {}
+                for idx, cell in enumerate(row):
+                    if idx < len(headers):
+                        fila[headers[idx]] = cell.value
+                datos.append(fila)
             
-            tickets_1art = tickets_con_articulos[tickets_con_articulos['N_Articulos'] == 1].sort_values('Total', ascending=False).reset_index(drop=True)
-            tickets_2art = tickets_con_articulos[tickets_con_articulos['N_Articulos'] == 2].sort_values('Total', ascending=False).reset_index(drop=True)
+            tickets_por_caja = {}
+            for fila in datos:
+                caja = fila.get('N° Caja')
+                if caja:
+                    if caja not in tickets_por_caja:
+                        tickets_por_caja[caja] = []
+                    tickets_por_caja[caja].append(fila)
+            
+            tickets_1art = []
+            tickets_2art = []
+            
+            for caja, articulos in tickets_por_caja.items():
+                total = sum(float(art.get('Subtotal', 0) or 0) for art in articulos)
+                cupón = str(articulos[0].get('N° Cupón', ''))
+                
+                if len(articulos) == 1:
+                    tickets_1art.append({
+                        'caja': caja,
+                        'cupón': cupón,
+                        'total': total,
+                        'articulos': articulos
+                    })
+                elif len(articulos) == 2:
+                    tickets_2art.append({
+                        'caja': caja,
+                        'cupón': cupón,
+                        'total': total,
+                        'articulos': articulos
+                    })
+            
+            tickets_1art.sort(key=lambda x: x['total'], reverse=True)
+            tickets_2art.sort(key=lambda x: x['total'], reverse=True)
             
             lotes = self._crear_lotes(tickets_1art, tickets_2art)
-            self._procesar_articulos(lotes, df, tickets_con_articulos)
-            
             excel_bytes = self._generar_excel(lotes, pto_venta, z_codigo)
+            
             return excel_bytes
             
         except Exception as e:
@@ -48,103 +77,52 @@ class GeneradorReportes:
     def _crear_lotes(self, tickets_1art, tickets_2art):
         """Crea lotes respetando distribución Benford"""
         lotes = []
-        lote_actual = {'numero': 1, 'cajas': [], 'items': 0, 'monto': 0, 'composicion': {'1art': 0, '2art': 0}}
+        lote_actual = {'numero': 1, 'cajas': [], 'items': 0, 'monto': 0, 'tickets': []}
         
         idx_1art = 0
         idx_2art = 0
-        total_tickets = len(tickets_1art) + len(tickets_2art)
-        tickets_procesados = 0
         
-        while tickets_procesados < total_tickets:
+        while idx_1art < len(tickets_1art) or idx_2art < len(tickets_2art):
             items_faltantes = 9 - lote_actual['items']
             
             if items_faltantes == 0:
                 lotes.append(lote_actual)
-                lote_actual = {'numero': len(lotes) + 1, 'cajas': [], 'items': 0, 'monto': 0, 'composicion': {'1art': 0, '2art': 0}}
+                lote_actual = {'numero': len(lotes) + 1, 'cajas': [], 'items': 0, 'monto': 0, 'tickets': []}
                 items_faltantes = 9
             
-            proporcion_1art_actual = (lote_actual['composicion']['1art'] / 9) if lote_actual['items'] > 0 else 0.73
             added = False
             
-            if idx_1art < len(tickets_1art) and items_faltantes >= 1 and proporcion_1art_actual < 0.73:
-                ticket = tickets_1art.iloc[idx_1art]
-                lote_actual['cajas'].append(ticket['N° Caja'])
+            if idx_1art < len(tickets_1art) and items_faltantes >= 1:
+                ticket = tickets_1art[idx_1art]
+                lote_actual['cajas'].append(ticket['caja'])
                 lote_actual['items'] += 1
-                lote_actual['monto'] += ticket['Total']
-                lote_actual['composicion']['1art'] += 1
+                lote_actual['monto'] += ticket['total']
+                lote_actual['tickets'].append(ticket)
                 idx_1art += 1
-                tickets_procesados += 1
                 added = True
             elif idx_2art < len(tickets_2art) and items_faltantes >= 2:
-                ticket = tickets_2art.iloc[idx_2art]
-                lote_actual['cajas'].append(ticket['N° Caja'])
+                ticket = tickets_2art[idx_2art]
+                lote_actual['cajas'].append(ticket['caja'])
                 lote_actual['items'] += 2
-                lote_actual['monto'] += ticket['Total']
-                lote_actual['composicion']['2art'] += 1
+                lote_actual['monto'] += ticket['total']
+                lote_actual['tickets'].append(ticket)
                 idx_2art += 1
-                tickets_procesados += 1
-                added = True
-            elif idx_1art < len(tickets_1art) and items_faltantes >= 1:
-                ticket = tickets_1art.iloc[idx_1art]
-                lote_actual['cajas'].append(ticket['N° Caja'])
-                lote_actual['items'] += 1
-                lote_actual['monto'] += ticket['Total']
-                lote_actual['composicion']['1art'] += 1
-                idx_1art += 1
-                tickets_procesados += 1
                 added = True
             
-            if not added and lote_actual['cajas']:
-                lotes.append(lote_actual)
-                lote_actual = {'numero': len(lotes) + 1, 'cajas': [], 'items': 0, 'monto': 0, 'composicion': {'1art': 0, '2art': 0}}
+            if not added:
+                if lote_actual['cajas']:
+                    lotes.append(lote_actual)
+                    lote_actual = {'numero': len(lotes) + 1, 'cajas': [], 'items': 0, 'monto': 0, 'tickets': []}
+                else:
+                    break
         
         if lote_actual['cajas']:
             lotes.append(lote_actual)
         
         return lotes
     
-    def _procesar_articulos(self, lotes, df, tickets_con_articulos):
-        """Procesa artículos para cada lote"""
-        for lote in lotes:
-            lote['cajas'] = sorted(lote['cajas'], reverse=True)
-            lote['cajas_cupones_articulos'] = []
-            
-            for caja_id in lote['cajas']:
-                caja_data = tickets_con_articulos[tickets_con_articulos['N° Caja'] == caja_id].iloc[0]
-                cupón = str(caja_data['N° Cupón'])
-                
-                articulos_caja = []
-                caja_df = df[df['N° Caja'] == caja_id]
-                for _, row in caja_df.iterrows():
-                    articulos_caja.append({
-                        'Código': row['Código'],
-                        'Título': row['Título'],
-                        'Cantidad': row['Cantidad'],
-                        'Precio Unit.': row['Precio Unit.'],
-                        'Subtotal': row['Subtotal'],
-                        'Cupón': cupón
-                    })
-                
-                lote['cajas_cupones_articulos'].append({
-                    'caja': caja_id,
-                    'cupón': cupón,
-                    'articulos': articulos_caja
-                })
-            
-            articulos_lote = []
-            for caja_info in lote['cajas_cupones_articulos']:
-                articulos_lote.extend(caja_info['articulos'])
-            
-            df_lote = pd.DataFrame(articulos_lote)
-            lote['articulos_agrupados'] = df_lote.groupby(['Código', 'Título']).agg({
-                'Cantidad': 'sum',
-                'Precio Unit.': 'first',
-                'Subtotal': 'sum',
-                'Cupón': lambda x: ', '.join(sorted(set(str(c) for c in x)))
-            }).reset_index().sort_values('Cantidad', ascending=False)
-    
     def _generar_excel(self, lotes, pto_venta, z_codigo):
-        """Genera el archivo Excel y lo retorna como bytes"""
+        """Genera el archivo Excel"""
         wb = Workbook()
         if 'Sheet' in wb.sheetnames:
             wb.remove(wb['Sheet'])
@@ -159,14 +137,15 @@ class GeneradorReportes:
         total_font = Font(bold=True, color='FFFFFF', size=11)
         border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
-        # HOJA 1: RESUMEN LOTES
         sheet_resumen = wb.create_sheet("Resumen Lotes", 0)
         row = 1
         
         for lote in lotes:
+            cajas_sorted = sorted(lote['cajas'], reverse=True)
+            
             sheet_resumen.merge_cells(f'A{row}:D{row}')
             cell = sheet_resumen.cell(row=row, column=1)
-            cell.value = f"LOTE {lote['numero']} - Cajas: {', '.join(lote['cajas'])}"
+            cell.value = f"LOTE {lote['numero']} - Cajas: {', '.join(str(c) for c in cajas_sorted)}"
             cell.font = lote_header_font
             cell.fill = lote_header_fill
             cell.border = border
@@ -185,35 +164,37 @@ class GeneradorReportes:
             row += 1
             
             nro_orden = 1
-            for _, art in lote['articulos_agrupados'].iterrows():
-                cell = sheet_resumen.cell(row=row, column=1)
-                cell.value = nro_orden
-                cell.border = border
-                cell.alignment = Alignment(horizontal='center')
-                
-                cell = sheet_resumen.cell(row=row, column=2)
-                cell.value = art['Cupón']
-                cell.border = border
-                cell.alignment = Alignment(horizontal='center')
-                cell.number_format = '@'
-                
-                codigo = art['Código']
-                cantidad = int(art['Cantidad'])
-                detalle = f"{pto_venta}/{z_codigo} / {codigo} / {cantidad}"
-                
-                cell = sheet_resumen.cell(row=row, column=3)
-                cell.value = detalle
-                cell.border = border
-                cell.alignment = Alignment(horizontal='left', wrap_text=True)
-                
-                cell = sheet_resumen.cell(row=row, column=4)
-                cell.value = int(art['Subtotal'])
-                cell.number_format = '$#,##0'
-                cell.border = border
-                cell.alignment = Alignment(horizontal='right')
-                
-                nro_orden += 1
-                row += 1
+            for ticket in lote['tickets']:
+                for articulo in ticket['articulos']:
+                    cell = sheet_resumen.cell(row=row, column=1)
+                    cell.value = nro_orden
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='center')
+                    
+                    cell = sheet_resumen.cell(row=row, column=2)
+                    cell.value = str(ticket['cupón'])
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='center')
+                    cell.number_format = '@'
+                    
+                    codigo = articulo.get('Código', '')
+                    cantidad = int(articulo.get('Cantidad', 0) or 0)
+                    detalle = f"{pto_venta}/{z_codigo} / {codigo} / {cantidad}"
+                    
+                    cell = sheet_resumen.cell(row=row, column=3)
+                    cell.value = detalle
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='left', wrap_text=True)
+                    
+                    monto = float(articulo.get('Subtotal', 0) or 0)
+                    cell = sheet_resumen.cell(row=row, column=4)
+                    cell.value = int(monto)
+                    cell.number_format = '$#,##0'
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='right')
+                    
+                    nro_orden += 1
+                    row += 1
             
             sheet_resumen.merge_cells(f'A{row}:C{row}')
             cell = sheet_resumen.cell(row=row, column=1)
@@ -224,7 +205,7 @@ class GeneradorReportes:
             cell.alignment = Alignment(horizontal='right')
             
             cell = sheet_resumen.cell(row=row, column=4)
-            cell.value = lote['monto']
+            cell.value = int(lote['monto'])
             cell.number_format = '$#,##0'
             cell.font = Font(bold=True)
             cell.fill = lote_header_fill
@@ -242,7 +223,7 @@ class GeneradorReportes:
         cell.alignment = Alignment(horizontal='right')
         
         cell = sheet_resumen.cell(row=row, column=4)
-        cell.value = sum(l['monto'] for l in lotes)
+        cell.value = int(sum(l['monto'] for l in lotes))
         cell.number_format = '$#,##0'
         cell.font = total_font
         cell.fill = total_fill
@@ -254,7 +235,6 @@ class GeneradorReportes:
         sheet_resumen.column_dimensions['C'].width = 50
         sheet_resumen.column_dimensions['D'].width = 15
         
-        # HOJA 2: COMPLETO
         sheet_completo = wb.create_sheet("Completo", 1)
         
         sheet_completo['A1'] = 'DETALLE DE PRODUCTOS POR LOTE - DISTRIBUCIÓN NATURAL DE BENFORD'
@@ -272,9 +252,11 @@ class GeneradorReportes:
         row = 4
         
         for lote in lotes:
+            cajas_sorted = sorted(lote['cajas'], reverse=True)
+            
             sheet_completo.merge_cells(f'A{row}:E{row}')
             cell = sheet_completo.cell(row=row, column=1)
-            cell.value = f"LOTE {lote['numero']} - Cajas: {', '.join(lote['cajas'])}"
+            cell.value = f"LOTE {lote['numero']} - Cajas: {', '.join(str(c) for c in cajas_sorted)}"
             cell.font = lote_header_font
             cell.fill = lote_header_fill
             cell.border = border
@@ -292,35 +274,39 @@ class GeneradorReportes:
                 cell.border = border
             row += 1
             
-            for _, art in lote['articulos_agrupados'].iterrows():
-                cell = sheet_completo.cell(row=row, column=1)
-                cell.value = art['Código']
-                cell.border = border
-                cell.alignment = Alignment(horizontal='center')
-                
-                cell = sheet_completo.cell(row=row, column=2)
-                cell.value = art['Título']
-                cell.border = border
-                cell.alignment = Alignment(horizontal='left', wrap_text=True)
-                
-                cell = sheet_completo.cell(row=row, column=3)
-                cell.value = int(art['Cantidad'])
-                cell.border = border
-                cell.alignment = Alignment(horizontal='center')
-                
-                cell = sheet_completo.cell(row=row, column=4)
-                cell.value = art['Precio Unit.']
-                cell.number_format = '$#,##0'
-                cell.border = border
-                cell.alignment = Alignment(horizontal='right')
-                
-                cell = sheet_completo.cell(row=row, column=5)
-                cell.value = int(art['Subtotal'])
-                cell.number_format = '$#,##0'
-                cell.border = border
-                cell.alignment = Alignment(horizontal='right')
-                
-                row += 1
+            for ticket in lote['tickets']:
+                for articulo in ticket['articulos']:
+                    cell = sheet_completo.cell(row=row, column=1)
+                    cell.value = articulo.get('Código', '')
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='center')
+                    
+                    cell = sheet_completo.cell(row=row, column=2)
+                    cell.value = articulo.get('Título', '')
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='left', wrap_text=True)
+                    
+                    cell = sheet_completo.cell(row=row, column=3)
+                    cell.value = int(articulo.get('Cantidad', 0) or 0)
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='center')
+                    
+                    cell = sheet_completo.cell(row=row, column=4)
+                    cell.value = float(articulo.get('Precio Unit.', 0) or 0)
+                    cell.number_format = '$#,##0'
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='right')
+                    
+                    cell = sheet_completo.cell(row=row, column=5)
+                    cell.value = int(float(articulo.get('Subtotal', 0) or 0))
+                    cell.number_format = '$#,##0'
+                    cell.border = border
+                    cell.alignment = Alignment(horizontal='right')
+                    
+                    row += 1
+            
+            total_cantidad = sum(int(art.get('Cantidad', 0) or 0) for ticket in lote['tickets'] for art in ticket['articulos'])
+            total_monto = sum(float(art.get('Subtotal', 0) or 0) for ticket in lote['tickets'] for art in ticket['articulos'])
             
             cell = sheet_completo.cell(row=row, column=1)
             cell.value = "SUMA TOTAL"
@@ -334,7 +320,7 @@ class GeneradorReportes:
             cell.border = border
             
             cell = sheet_completo.cell(row=row, column=3)
-            cell.value = sum(int(art['Cantidad']) for _, art in lote['articulos_agrupados'].iterrows())
+            cell.value = total_cantidad
             cell.font = Font(bold=True)
             cell.fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid')
             cell.border = border
@@ -345,7 +331,7 @@ class GeneradorReportes:
             cell.border = border
             
             cell = sheet_completo.cell(row=row, column=5)
-            cell.value = sum(int(art['Subtotal']) for _, art in lote['articulos_agrupados'].iterrows())
+            cell.value = int(total_monto)
             cell.number_format = '$#,##0'
             cell.font = Font(bold=True)
             cell.fill = PatternFill(start_color='FFFF99', end_color='FFFF99', fill_type='solid')
@@ -353,30 +339,6 @@ class GeneradorReportes:
             cell.alignment = Alignment(horizontal='right')
             
             row += 3
-        
-        sheet_completo.merge_cells(f'A{row}:B{row}')
-        cell = sheet_completo.cell(row=row, column=1)
-        cell.value = "TOTAL GENERAL"
-        cell.font = total_font
-        cell.fill = total_fill
-        cell.border = border
-        cell.alignment = Alignment(horizontal='right')
-        
-        cell = sheet_completo.cell(row=row, column=3)
-        cell.fill = total_fill
-        cell.border = border
-        
-        cell = sheet_completo.cell(row=row, column=4)
-        cell.fill = total_fill
-        cell.border = border
-        
-        cell = sheet_completo.cell(row=row, column=5)
-        cell.value = sum(l['monto'] for l in lotes)
-        cell.number_format = '$#,##0'
-        cell.font = total_font
-        cell.fill = total_fill
-        cell.border = border
-        cell.alignment = Alignment(horizontal='right')
         
         sheet_completo.column_dimensions['A'].width = 14
         sheet_completo.column_dimensions['B'].width = 45
